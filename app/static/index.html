@@ -56,10 +56,39 @@
           <div class="hint">仅同一父级下的兄弟可换序；拖动父条款会连同整棵子树一起移动，删除父条款一并删除子条款</div>
         </div>
         <div id="issues-bar" class="issues-bar hidden"></div>
+        <div id="preview-bar" class="preview-bar">
+          <button id="btn-preview" class="btn btn-primary btn-sm" type="button" disabled>
+            🔍 删除影响预演（已选 <span id="preview-count">0</span> 项）
+          </button>
+          <span class="hint">勾选下方未删除条款的复选框后先预演：父条款按现有规则连同后代纳入拟删除集；预演只预览、不改草稿</span>
+        </div>
         <ul id="sortable" class="sortable"></ul>
         <div id="tray" class="tray hidden">
           <div class="tray-head">已删除（点击恢复）</div>
           <div id="tray-list" class="tray-list"></div>
+        </div>
+
+        <div id="preview-pane" class="preview-pane hidden">
+          <div class="panel-head">
+            <h2>🔍 删除影响预演（预览中，草稿未修改）</h2>
+          </div>
+          <div id="preview-stale" class="preview-stale hidden">
+            ⚠ 正文、排序或删除状态已变化，本预演结果已过期，不能直接确认；
+            <button id="btn-repreview" class="btn btn-sm" type="button">按当前选择重新预演</button>
+          </div>
+          <div id="preview-summary" class="preview-summary"></div>
+          <div class="preview-section">
+            <div class="preview-section-title">拟删除集（含父条款级联的后代）</div>
+            <div id="preview-delete" class="preview-chips"></div>
+          </div>
+          <div class="preview-section">
+            <div class="preview-section-title">删除后仍存活、但绑定受影响的条款（点击可定位；↺ 表示链上含引用循环）</div>
+            <div id="preview-impacts" class="preview-impacts"></div>
+          </div>
+          <div class="preview-actions">
+            <button id="btn-confirm-delete" class="btn btn-danger" type="button">确认删除（一次性套用级联删除并重排 / 改写 / 术语审校）</button>
+            <button id="btn-cancel-preview" class="btn btn-ghost" type="button">取消（草稿不变）</button>
+          </div>
         </div>
       </div>
 

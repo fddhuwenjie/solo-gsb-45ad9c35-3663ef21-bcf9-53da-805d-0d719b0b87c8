@@ -27,6 +27,17 @@ const els = {
   termIgnored: $("#term-ignored"),
   termIgnoredList: $("#term-ignored-list"),
   termsView: $("#terms-view"),
+  previewBar: $("#preview-bar"),
+  btnPreview: $("#btn-preview"),
+  previewCount: $("#preview-count"),
+  previewPane: $("#preview-pane"),
+  previewStale: $("#preview-stale"),
+  btnRePreview: $("#btn-repreview"),
+  previewSummary: $("#preview-summary"),
+  previewDelete: $("#preview-delete"),
+  previewImpacts: $("#preview-impacts"),
+  btnConfirmDelete: $("#btn-confirm-delete"),
+  btnCancelPreview: $("#btn-cancel-preview"),
 };
 
 // 运行时状态
@@ -42,6 +53,11 @@ const state = {
   mode: "refs",     // refs | terms
   terms: null,      // 最近一次 /api/terms 响应
   termIgnores: [],  // 已忽略的术语问题 occ_id（随草稿保存）
+  // 删除影响预演（纯预览；确认前不进入 order/deleted，不改草稿）
+  previewSel: [],       // 勾选的存活条款 id（仅存活项有效）
+  previewResult: null,  // 最近一次预演响应
+  previewStale: false,  // 正文/排序/删除变化后旧结果过期，不可确认
+  previewBusy: false,
 };
 
 const LS_KEY = "clause-rebench-session";
@@ -223,9 +239,14 @@ async function runAnalyze(structureChanged = false) {
     els.workspace.classList.remove("hidden");
     state.lastParsedText = state.text;
     saveSession();
+    // 预演选择只保留仍存活条款；正文/排序/删除变化后旧结果标记过期
+    state.previewSel = state.previewSel.filter(
+      (id) => state.clauseMap.has(id) && !state.deleted.includes(id));
+    invalidatePreview();
     fetchTerms();
   } catch (e) {
     els.status.textContent = "分析失败：" + e.message;
+    throw e;
   }
 }
 
@@ -274,6 +295,7 @@ function renderSortable() {
   } else {
     els.tray.classList.add("hidden");
   }
+  updatePreviewBar();
 }
 
 function makeCard(cid, depth, draggable, liveLabel) {
@@ -286,12 +308,26 @@ function makeCard(cid, depth, draggable, liveLabel) {
 
   li.innerHTML = `
     <span class="drag-handle" title="${draggable ? "拖动排序（仅同一父级内）" : "重复编号，不可拖动"}">⠿</span>
+    <input type="checkbox" class="preview-check" data-cid="${cid}"
+      title="加入删除影响预演（不立即删除）" />
     <span class="new-badge">${esc(liveLabel || c.new_label || "—")}</span>
     <span class="old-label">${esc(c.label)}</span>
     <span class="card-heading">${esc(c.heading || "（无正文）")}</span>
     <span class="card-actions">
       <button type="button" class="btn-danger-mini" title="删除该条款（含全部子条款）">✕</button>
     </span>`;
+
+  const check = li.querySelector(".preview-check");
+  check.checked = state.previewSel.includes(cid);
+  check.addEventListener("click", (e) => e.stopPropagation());
+  check.addEventListener("change", () => {
+    const set = new Set(state.previewSel);
+    if (check.checked) set.add(cid); else set.delete(cid);
+    state.previewSel = [...set];
+    if (state.previewResult) invalidatePreview();
+    updatePreviewBar();
+    saveSession();
+  });
 
   li.querySelector(".btn-danger-mini").addEventListener("click", (e) => {
     e.stopPropagation();
@@ -300,6 +336,10 @@ function makeCard(cid, depth, draggable, liveLabel) {
 
   if (draggable) {
     li.addEventListener("dragstart", (e) => {
+      if (e.target && e.target.closest && e.target.closest("input,button")) {
+        e.preventDefault();
+        return;
+      }
       state.dragCid = cid;
       li.classList.add("dragging");
       e.dataTransfer.effectAllowed = "move";
@@ -413,11 +453,17 @@ function attachDropZone(li, targetCid, virtualKey = null) {
       toast("只能在同一父级下调整顺序（子条款会随父条款整棵移动）");
       return;
     }
+    if (state.previewResult) invalidatePreview();
     scheduleAnalyze();
   });
 }
 
 function deleteClause(cid) {
+  // 直接删除走现有流程；任何打开的预演立即作废（删除状态已变）
+  state.previewResult = null;
+  state.previewStale = false;
+  state.previewSel = [];
+  els.previewPane.classList.add("hidden");
   // 连同整棵子树一起删除
   const c = state.clauseMap.get(cid);
   const pref = c.path || [];
@@ -432,11 +478,15 @@ function deleteClause(cid) {
       state.deleted.push(x.id);
     }
   });
-  runAnalyze();
+  runAnalyze().catch(() => {});
 }
 
 function restoreClause(cid) {
   // 恢复父条款时一并恢复其全部后代；顺序按解析顺序回到同级原位
+  state.previewResult = null;
+  state.previewStale = false;
+  state.previewSel = [];
+  els.previewPane.classList.add("hidden");
   const c = state.clauseMap.get(cid);
   const pref = c.path || [];
   state.data.clauses.forEach((x) => {
@@ -446,7 +496,235 @@ function restoreClause(cid) {
     }
   });
   // 交给后端按解析顺序把恢复的子树归位
-  runAnalyze();
+  runAnalyze().catch(() => {});
+}
+
+// ---------------------------------------------------------------- 删除影响预演
+
+// 正文 / 排序 / 删除状态变化后：旧结果保留展示但不得确认，必须重新预演
+function invalidatePreview() {
+  if (!state.previewResult) return;
+  state.previewStale = true;
+  els.previewStale.classList.remove("hidden");
+  els.btnConfirmDelete.disabled = true;
+  updatePreviewBar();
+}
+
+function updatePreviewBar() {
+  const n = state.previewSel.length;
+  els.previewCount.textContent = String(n);
+  els.btnPreview.disabled = n === 0 || state.previewBusy;
+  if (state.previewResult && state.previewStale) {
+    els.btnPreview.textContent = "🔍 重新预演";
+  } else {
+    els.btnPreview.textContent = `🔍 删除影响预演（已选 ${n} 项）`;
+  }
+}
+
+async function openPreview() {
+  if (!state.previewSel.length || state.previewBusy) return;
+  const sigBefore = JSON.stringify({
+    text: els.input.value,
+    order: state.order,
+    deleted: state.deleted,
+    sel: [...state.previewSel].sort(),
+  });
+  state.previewBusy = true;
+  els.btnPreview.disabled = true;
+  els.btnPreview.textContent = "预演中…";
+  try {
+    const res = await api("/api/delete-preview", {
+      method: "POST",
+      body: JSON.stringify({
+        text: els.input.value,
+        order: state.order,
+        deleted: state.deleted,
+        candidates: state.previewSel,
+      }),
+    });
+    state.previewResult = res;
+    // 服务端候选可能与本地选择有出入（异常 id 被过滤），以返回为准
+    state.previewSel = res.candidates.slice();
+    const sigAfter = JSON.stringify({
+      text: els.input.value,
+      order: state.order,
+      deleted: state.deleted,
+      sel: [...state.previewSel].sort(),
+    });
+    state.previewStale = sigBefore !== sigAfter;
+    renderPreview();
+  } catch (e) {
+    toast("预演分析失败：" + e.message);
+    updatePreviewBar();
+  } finally {
+    state.previewBusy = false;
+    updatePreviewBar();
+  }
+}
+
+const PREVIEW_KIND_META = {
+  ref_broken: { tag: "引用失效", cls: "deleted" },
+  term_lost_unique: { tag: "失去唯一定义", cls: "warn" },
+  term_ambiguous: { tag: "变歧义", cls: "purple" },
+  term_rebound: { tag: "改绑定义", cls: "cyan" },
+};
+
+function renderPreview() {
+  const res = state.previewResult;
+  if (!res) return;
+  els.previewPane.classList.remove("hidden");
+  els.previewStale.classList.toggle("hidden", !state.previewStale);
+  els.btnConfirmDelete.disabled = state.previewStale;
+
+  const c = res.counts;
+  els.previewSummary.innerHTML =
+    `<span class="pv-stat"><b>${c.selected}</b> 项勾选</span>` +
+    `<span class="pv-stat">+ <b>${c.cascade}</b> 项级联后代</span>` +
+    `<span class="pv-stat">拟删除共 <b>${c.to_delete}</b> 项</span>` +
+    `<span class="pv-stat ${c.impacts ? "bad" : ""}">存活但受影响 <b>${c.impacts}</b> 条款` +
+    `（直接 ${c.direct} / 反向连锁 ${c.transitive}）</span>` +
+    `<span class="pv-stat">引用失效 <b>${c.ref}</b></span>` +
+    `<span class="pv-stat">术语绑定变化 <b>${c.term}</b></span>` +
+    (c.cycles ? `<span class="pv-stat bad">↺ 含循环链 <b>${c.cycles}</b></span>` : "");
+
+  els.previewDelete.innerHTML = "";
+  res.to_delete.forEach((d) => {
+    const chip = document.createElement("button");
+    chip.type = "button";
+    chip.className = "pv-del-chip" + (d.selected ? " picked" : " cascade");
+    chip.textContent = (d.selected ? "☑ " : "⤷ ") + d.label;
+    chip.title = d.heading || (d.selected ? "用户勾选" : "随父条款级联删除");
+    chip.addEventListener("click", () => locate(d.id));
+    els.previewDelete.appendChild(chip);
+  });
+
+  els.previewImpacts.innerHTML = "";
+  if (!res.impacts.length) {
+    const ok = document.createElement("div");
+    ok.className = "preview-ok";
+    ok.textContent = "✓ 删除后其余存活条款的引用与术语绑定均不受影响";
+    els.previewImpacts.appendChild(ok);
+  }
+  res.impacts.forEach((row, idx) => {
+    const div = document.createElement("div");
+    div.className = "pv-row";
+    const head = document.createElement("div");
+    head.className = "pv-row-head";
+    const kindCls = (row.details[0]
+      && PREVIEW_KIND_META[row.details[0].kind].cls) || "muted";
+    head.innerHTML =
+      `<span class="pv-idx">${idx + 1}</span>` +
+      `<button type="button" class="pv-clause ${kindCls}">` +
+      `${esc(row.label)} ${esc(row.heading)}</button>` +
+      (row.distance > 0
+        ? `<span class="pv-hop">连锁 ${row.distance} 跳</span>`
+        : `<span class="pv-hop direct">直接</span>`) +
+      (row.cycle ? `<span class="pv-cycle" title="原因链上含引用循环">↺ 循环</span>` : "");
+    head.querySelector(".pv-clause").addEventListener("click", () => {
+      if (row.clause_id === "preamble") locate("preamble");
+      else locate(row.clause_id);
+    });
+    div.appendChild(head);
+
+    row.details.forEach((d) => {
+      const meta = PREVIEW_KIND_META[d.kind] || { tag: d.kind, cls: "muted" };
+      const line = document.createElement("div");
+      line.className = `pv-detail ${meta.cls}`;
+      line.innerHTML =
+        `<span class="chip-tag">${meta.tag}</span>` +
+        `<span class="pv-msg">${esc(d.message)}</span>`;
+      line.addEventListener("click", () => locate(row.clause_id, d.target_id));
+      div.appendChild(line);
+    });
+
+    const chain = document.createElement("div");
+    chain.className = "pv-chain";
+    row.chain.forEach((node, i) => {
+      if (i > 0) chain.appendChild(document.createTextNode(" ▸ "));
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "pv-chain-node";
+      b.textContent = node.label + (node.heading ? ` ${node.heading}` : "");
+      const isTerminal = i === row.chain.length - 1;
+      b.classList.toggle("terminal", isTerminal);
+      b.title = isTerminal ? "根因（被删除目标 / 被移除定义）" : "点击定位";
+      b.addEventListener("click", () => locate(node.id));
+      chain.appendChild(b);
+    });
+    div.appendChild(chain);
+    els.previewImpacts.appendChild(div);
+  });
+
+  els.previewPane.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  updatePreviewBar();
+}
+
+function closePreview() {
+  state.previewResult = null;
+  state.previewStale = false;
+  state.previewSel = [];
+  els.previewPane.classList.add("hidden");
+  renderSortable(); // 清空卡片勾选
+  updatePreviewBar();
+}
+
+async function confirmPreview() {
+  // 确认前再次校验：正文 / 排序 / 删除状态与预演签名一致才允许套用
+  if (!state.previewResult || state.previewStale) {
+    toast("预演结果已过期，请重新预演后再确认");
+    return;
+  }
+  const picked = state.previewResult.to_delete.map((d) => d.id);
+  const snapshot = {
+    order: state.order.slice(), deleted: state.deleted.slice(),
+    data: state.data,
+  };
+  els.btnConfirmDelete.disabled = true;
+  els.btnConfirmDelete.textContent = "套用中…";
+
+  // 一次性套用现有级联删除（前端按路径前缀展开，与后端 cascade_deleted 一致）
+  picked.forEach((cid) => {
+    const c = state.clauseMap.get(cid);
+    if (!c) return;
+    const pref = c.path || [];
+    state.order = state.order.filter((x) => {
+      const p = state.clauseMap.get(x).path || [];
+      return !(p.length >= pref.length && pref.every((s, k) => s === p[k]));
+    });
+    state.data.clauses.forEach((x) => {
+      const p = x.path || [];
+      if (p.length >= pref.length && pref.every((s, k) => s === p[k])
+          && !state.deleted.includes(x.id)) {
+        state.deleted.push(x.id);
+      }
+    });
+  });
+
+  try {
+    await runAnalyze(true); // 重排、引用改写、术语审校一并刷新
+    // 成功：关闭预演，清空勾选
+    state.previewResult = null;
+    state.previewStale = false;
+    state.previewSel = [];
+    els.previewPane.classList.add("hidden");
+    renderSortable();
+    updatePreviewBar();
+    toast(`已套用删除（${picked.length} 项），引用重写与术语审校已刷新`);
+  } catch (e) {
+    // 分析失败：草稿回滚到确认前，预演结果不得继续确认
+    state.order = snapshot.order;
+    state.deleted = snapshot.deleted;
+    state.data = snapshot.data;
+    state.previewStale = true;
+    state.previewSel = state.previewSel.filter(
+      (id) => state.clauseMap.has(id) && !state.deleted.includes(id));
+    renderSortable();
+    renderAll();
+    renderPreview();
+    toast("确认失败，草稿未改变：" + e.message);
+  } finally {
+    els.btnConfirmDelete.textContent = "确认删除（一次性套用级联删除并重排 / 改写 / 术语审校）";
+  }
 }
 
 // ---------------------------------------------------------------- 问题条
@@ -553,7 +831,8 @@ function renderCompare() {
   els.before.innerHTML = "";
   if (d.preamble) {
     const p = document.createElement("div");
-    p.className = "preamble-block";
+    p.className = "preamble-block clause-block";
+    p.dataset.cid = "preamble";
     p.textContent = d.preamble;
     els.before.appendChild(p);
   }
@@ -565,7 +844,8 @@ function renderCompare() {
   els.after.innerHTML = "";
   if (d.preamble) {
     const p = document.createElement("div");
-    p.className = "preamble-block";
+    p.className = "preamble-block clause-block";
+    p.dataset.cid = "preamble";
     p.textContent = d.preamble;
     els.after.appendChild(p);
   }
@@ -609,9 +889,7 @@ function locate(...ids) {
       card.classList.add("flash");
     }
   });
-}
-
-// ---------------------------------------------------------------- 定义术语审校
+}// ---------------------------------------------------------------- 定义术语审校
 
 async function fetchTerms() {
   if (!els.input.value.trim()) {
@@ -742,6 +1020,7 @@ function renderTermBlock(b) {
   div.className = "term-block clause-block" +
     (b.kind === "preamble" ? " preamble-block" : "");
   div.dataset.bid = b.id;
+  div.dataset.cid = b.id;
   if (b.kind === "clause") {
     div.style.paddingLeft = (12 + Math.max(0, b.depth - 1) * 18) + "px";
     const label = document.createElement("span");
@@ -897,6 +1176,10 @@ async function loadDraft(id) {
   state.order = d.order;
   state.deleted = d.deleted;
   state.termIgnores = d.term_ignores || [];
+  state.previewSel = [];
+  state.previewResult = null;
+  state.previewStale = false;
+  els.previewPane.classList.add("hidden");
   await runAnalyze(true);
   toast(`已载入草稿：${d.title}`);
 }
@@ -920,6 +1203,9 @@ async function restoreSession() {
     state.order = s.order || [];
     state.deleted = s.deleted || [];
     state.termIgnores = s.term_ignores || [];
+    state.previewSel = [];
+    state.previewResult = null;
+    state.previewStale = false;
     await runAnalyze(true);
   }
 }
@@ -977,10 +1263,14 @@ function loadExample() {
   state.deleted = [];
   state.termIgnores = [];
   state.currentDraftId = null;
+  state.previewSel = [];
+  state.previewResult = null;
+  state.previewStale = false;
+  els.previewPane.classList.add("hidden");
   els.draftSelect.value = "";
   runAnalyze(true).then(() => {
     toast("示例已载入：可切换到「定义术语审校」查看未定义/未使用等问题；试删第3条观察局部定义随删除失效");
-  });
+  }).catch(() => {});
 }
 
 // ---------------------------------------------------------------- 事件绑定
@@ -992,7 +1282,7 @@ els.btnParse.addEventListener("click", () => {
     state.order = [];
     state.deleted = [];
   }
-  runAnalyze(true);
+  runAnalyze(true).catch(() => {});
 });
 els.btnExample.addEventListener("click", loadExample);
 els.btnSave.addEventListener("click", saveDraft);
@@ -1002,6 +1292,16 @@ els.draftSelect.addEventListener("change", async (e) => {
   if (e.target.value) await loadDraft(Number(e.target.value));
 });
 els.input.addEventListener("input", debounce(saveSession, 500));
+els.input.addEventListener("input", () => {
+  // 正文变化：旧预演结果不得直接确认（预演签名含正文）
+  if (state.previewResult) invalidatePreview();
+});
+
+// 删除影响预演
+els.btnPreview.addEventListener("click", openPreview);
+els.btnRePreview.addEventListener("click", openPreview);
+els.btnConfirmDelete.addEventListener("click", confirmPreview);
+els.btnCancelPreview.addEventListener("click", closePreview);
 
 // 启动
 refreshDrafts();
