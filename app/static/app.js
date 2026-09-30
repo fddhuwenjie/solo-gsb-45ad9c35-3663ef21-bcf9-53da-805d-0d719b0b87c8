@@ -27,6 +27,19 @@ const els = {
   termIgnored: $("#term-ignored"),
   termIgnoredList: $("#term-ignored-list"),
   termsView: $("#terms-view"),
+  // 删除影响预演
+  btnDeletePreview: $("#btn-delete-preview"),
+  dpPanel: $("#delete-preview-panel"),
+  dpSelectedList: $("#dp-selected-list"),
+  btnDpRun: $("#btn-dp-run"),
+  btnDpCancel: $("#btn-dp-cancel"),
+  dpResult: $("#dp-result"),
+  dpStale: $("#dp-stale"),
+  dpSummary: $("#dp-summary"),
+  dpDeletedList: $("#dp-deleted-list"),
+  dpEntries: $("#dp-entries"),
+  btnDpConfirm: $("#btn-dp-confirm"),
+  btnDpClose: $("#btn-dp-close"),
 };
 
 // 运行时状态
@@ -42,6 +55,12 @@ const state = {
   mode: "refs",     // refs | terms
   terms: null,      // 最近一次 /api/terms 响应
   termIgnores: [],  // 已忽略的术语问题 occ_id（随草稿保存）
+  // 删除影响预演
+  previewMode: false,   // 是否处于勾选/预览态（预览态禁用拖动与直接删除）
+  previewPicked: [],    // 勾选的存活条款 id
+  previewData: null,    // 最近一次 /api/delete-preview 响应
+  previewSig: null,     // 生成预览结果时的草稿指纹
+  previewBusy: false,
 };
 
 const LS_KEY = "clause-rebench-session";
@@ -202,6 +221,7 @@ async function runAnalyze(structureChanged = false) {
   if (!state.text.trim()) {
     els.workspace.classList.add("hidden");
     state.lastParsedText = null;
+    if (state.previewMode) exitPreviewMode();
     return;
   }
   try {
@@ -224,6 +244,14 @@ async function runAnalyze(structureChanged = false) {
     state.lastParsedText = state.text;
     saveSession();
     fetchTerms();
+    // 预演态下任何分析返回都可能使勾选/旧结果失效：清理失效勾选并标记陈旧
+    if (state.previewMode) {
+      const alive = new Set(state.order);
+      state.previewPicked = state.previewPicked.filter((id) => alive.has(id));
+      renderSortable();
+      renderDpSelection();
+      if (state.previewData) markDpStale();
+    }
   } catch (e) {
     els.status.textContent = "分析失败：" + e.message;
   }
@@ -257,7 +285,7 @@ function renderSortable() {
   };
   renderNode(root, 0);
 
-  // 删除托盘
+  // 删除托盘（预演态禁止直接恢复，避免改动删除状态）
   if (state.deleted.length) {
     els.tray.classList.remove("hidden");
     els.trayList.innerHTML = "";
@@ -265,10 +293,14 @@ function renderSortable() {
       const c = state.clauseMap.get(cid);
       if (!c) return;
       const chip = document.createElement("span");
-      chip.className = "tray-item";
+      chip.className = "tray-item" + (state.previewMode ? " disabled" : "");
       chip.textContent = `${c.label} ＋`;
-      chip.title = "点击恢复「" + c.label + "」（连同其后代）";
-      chip.addEventListener("click", () => restoreClause(cid));
+      chip.title = state.previewMode
+        ? "删除影响预演进行中，不能恢复条款"
+        : "点击恢复「" + c.label + "」（连同其后代）";
+      if (!state.previewMode) {
+        chip.addEventListener("click", () => restoreClause(cid));
+      }
       els.trayList.appendChild(chip);
     });
   } else {
@@ -279,26 +311,50 @@ function renderSortable() {
 function makeCard(cid, depth, draggable, liveLabel) {
   const c = state.clauseMap.get(cid);
   const li = document.createElement("li");
-  li.className = "clause-card";
-  li.draggable = draggable;
+  li.className = "clause-card" + (state.previewMode ? " previewing" : "");
+  li.draggable = draggable && !state.previewMode;
   li.dataset.cid = cid;
   li.style.paddingLeft = (12 + depth * 22) + "px";
 
+  const checkHtml = state.previewMode
+    ? `<input type="checkbox" class="dp-check" title="勾选后纳入拟删除集（父条款含全部后代）"${
+        state.previewPicked.includes(cid) ? " checked" : ""} />`
+    : "";
+
   li.innerHTML = `
-    <span class="drag-handle" title="${draggable ? "拖动排序（仅同一父级内）" : "重复编号，不可拖动"}">⠿</span>
+    ${checkHtml}
+    <span class="drag-handle" title="${draggable && !state.previewMode ? "拖动排序（仅同一父级内）" : state.previewMode ? "删除影响预演进行中，暂不可拖动" : "重复编号，不可拖动"}">⠿</span>
     <span class="new-badge">${esc(liveLabel || c.new_label || "—")}</span>
     <span class="old-label">${esc(c.label)}</span>
     <span class="card-heading">${esc(c.heading || "（无正文）")}</span>
     <span class="card-actions">
-      <button type="button" class="btn-danger-mini" title="删除该条款（含全部子条款）">✕</button>
+      <button type="button" class="btn-danger-mini" title="${state.previewMode ? "删除影响预演进行中，请使用下方勾选" : "删除该条款（含全部子条款）"}">✕</button>
     </span>`;
 
-  li.querySelector(".btn-danger-mini").addEventListener("click", (e) => {
-    e.stopPropagation();
-    deleteClause(cid);
-  });
+  const btnDel = li.querySelector(".btn-danger-mini");
+  if (state.previewMode) {
+    btnDel.disabled = true;
+    btnDel.classList.add("disabled");
+    const box = li.querySelector(".dp-check");
+    box.addEventListener("click", (e) => e.stopPropagation());
+    box.addEventListener("change", () => {
+      if (box.checked) {
+        if (!state.previewPicked.includes(cid)) state.previewPicked.push(cid);
+      } else {
+        state.previewPicked = state.previewPicked.filter((x) => x !== cid);
+      }
+      renderDpSelection();
+      // 勾选集变化后，旧结果对应的拟删除集也已过时
+      if (state.previewData) markDpStale();
+    });
+  } else {
+    btnDel.addEventListener("click", (e) => {
+      e.stopPropagation();
+      deleteClause(cid);
+    });
+  }
 
-  if (draggable) {
+  if (draggable && !state.previewMode) {
     li.addEventListener("dragstart", (e) => {
       state.dragCid = cid;
       li.classList.add("dragging");
@@ -326,7 +382,7 @@ function makeVirtualRow(node, depth, newLabel, newKey) {
     <span class="new-badge virtual-badge">${esc(newLabel)}</span>
     <span class="virtual-hint">（原文未单列，仅含子条款）</span>`;
   // 虚节点只在顶层作为「同层兄弟」的落点（如 4.1/4.2 与第5条之间调整顺序）
-  if (depth === 1) attachDropZone(li, null, newKey);
+  if (depth === 1 && !state.previewMode) attachDropZone(li, null, newKey);
   return li;
 }
 
@@ -447,6 +503,264 @@ function restoreClause(cid) {
   });
   // 交给后端按解析顺序把恢复的子树归位
   runAnalyze();
+}
+
+// ---------------------------------------------------------------- 删除影响预演
+
+// 预演结果依赖的指纹：正文 / 排序 / 删除状态 / 勾选集任一变化即失效
+function draftSignature() {
+  return JSON.stringify({
+    t: els.input.value,
+    o: state.order,
+    d: [...state.deleted].sort(),
+    p: [...state.previewPicked].sort(),
+  });
+}
+
+function enterPreviewMode() {
+  if (!state.data || !state.order.length) {
+    toast("请先粘贴并解析合同文本");
+    return;
+  }
+  state.previewMode = true;
+  state.previewPicked = [];
+  state.previewData = null;
+  state.previewSig = null;
+  els.dpPanel.classList.remove("hidden");
+  els.dpResult.classList.add("hidden");
+  els.dpStale.classList.add("hidden");
+  els.btnDeletePreview.disabled = true;
+  renderSortable();
+  renderDpSelection();
+  els.dpPanel.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+function exitPreviewMode() {
+  state.previewMode = false;
+  state.previewPicked = [];
+  state.previewData = null;
+  state.previewSig = null;
+  state.previewBusy = false;
+  els.dpPanel.classList.add("hidden");
+  els.dpResult.classList.add("hidden");
+  els.dpStale.classList.add("hidden");
+  els.btnDeletePreview.disabled = false;
+  renderSortable();
+}
+
+function renderDpSelection() {
+  const picked = state.previewPicked
+    .map((cid) => state.clauseMap.get(cid))
+    .filter(Boolean);
+  if (!picked.length) {
+    els.dpSelectedList.textContent = "尚未勾选（在上方条款卡片左侧勾选）";
+    els.dpSelectedList.classList.add("empty");
+  } else {
+    els.dpSelectedList.classList.remove("empty");
+    els.dpSelectedList.textContent = picked
+      .map((c) => `${c.label} ${c.heading || ""}`.trim()).join("　");
+  }
+  els.btnDpRun.disabled = state.previewBusy || !picked.length;
+  els.btnDpRun.textContent = state.previewBusy ? "分析中…" : "预览影响";
+}
+
+async function runDeletePreview() {
+  if (!state.previewPicked.length) {
+    toast("请先勾选拟删除的条款");
+    return;
+  }
+  state.previewBusy = true;
+  renderDpSelection();
+  try {
+    const data = await api("/api/delete-preview", {
+      method: "POST",
+      body: JSON.stringify({
+        text: els.input.value,
+        order: state.order,
+        deleted: state.deleted,
+        selected: state.previewPicked,
+      }),
+    });
+    state.previewData = data;
+    state.previewSig = draftSignature();
+    renderDpResult();
+  } catch (e) {
+    // 分析失败不得改变草稿：提示并退出预演态（恢复可拖动 / 可删除）
+    toast("影响分析失败，草稿未改动：" + e.message);
+    exitPreviewMode();
+  } finally {
+    state.previewBusy = false;
+    renderDpSelection();
+  }
+}
+
+const DP_CHANGE_META = {
+  ref_broken: { tag: "引用失效", cls: "ref" },
+  term_lost: { tag: "术语失去唯一定义", cls: "term-lost" },
+  term_rebind: { tag: "术语改绑", cls: "term-rebind" },
+};
+
+function renderDpResult() {
+  const d = state.previewData;
+  if (!d) return;
+  els.dpResult.classList.remove("hidden");
+  markDpStale();
+
+  const c = d.counts;
+  els.dpSummary.innerHTML =
+    `<span class="dp-stat stat-delete">拟删除 <b>${c.new_deleted}</b> 条` +
+    (c.cascaded ? `（其中级联后代 ${c.cascaded} 条）` : "") + `</span>` +
+    `<span class="dp-stat stat-affect">仍存活受影响条款 <b>${c.affected_clauses}</b> 条` +
+    (c.cyclic_groups ? `（含 ${c.cyclic_groups} 个循环链合并项）` : "") + `</span>` +
+    `<span class="dp-stat stat-ref">引用失效 <b>${c.ref_broken}</b></span>` +
+    `<span class="dp-stat stat-term">术语失去唯一定义 <b>${c.term_lost}</b></span>` +
+    `<span class="dp-stat stat-rebind">改绑其他定义 <b>${c.term_rebind}</b></span>`;
+
+  // 拟删除清单
+  els.dpDeletedList.innerHTML = "";
+  if (d.new_deleted.length) {
+    const wrap = document.createElement("div");
+    wrap.className = "dp-deleted-wrap";
+    wrap.innerHTML = `<span class="dp-deleted-label">拟删除集：</span>`;
+    d.new_deleted.forEach((x) => {
+      const chip = document.createElement("button");
+      chip.type = "button";
+      chip.className = "dp-del-chip" + (x.picked ? " picked" : " cascaded");
+      chip.textContent = x.label + (x.picked ? "" : "（级联后代）");
+      chip.title = (x.heading || "") + (x.picked ? "" : "：随父条款一并删除");
+      chip.addEventListener("click", () => locate(x.id));
+      wrap.appendChild(chip);
+    });
+    els.dpDeletedList.appendChild(wrap);
+  }
+
+  // 受影响条目
+  els.dpEntries.innerHTML = "";
+  if (!d.entries.length) {
+    const ok = document.createElement("div");
+    ok.className = "dp-ok";
+    ok.textContent = "✓ 拟删除条款之外没有失效引用或术语绑定变化";
+    els.dpEntries.appendChild(ok);
+  } else {
+    d.entries.forEach((e) => els.dpEntries.appendChild(makeDpEntry(e)));
+  }
+}
+
+// 旧结果守卫：正文/排序/删除状态变化后不得直接确认
+function markDpStale() {
+  const stale = state.previewSig !== draftSignature();
+  els.dpStale.classList.toggle("hidden", !stale);
+  els.btnDpConfirm.disabled = stale || state.previewBusy;
+  els.btnDpConfirm.title = stale ? "草稿已变化，请重新预览后再确认" : "";
+}
+
+function makeDpChain(e) {
+  const chain = document.createElement("div");
+  chain.className = "dp-chain";
+  e.chain_nodes.forEach((node, i) => {
+    if (i > 0) {
+      const edge = document.createElement("span");
+      edge.className = "dp-chain-edge";
+      edge.textContent = "—" + (e.chain_edges[i - 1] || "依赖") + "→";
+      chain.appendChild(edge);
+    }
+    if (node.cyclic) {
+      const seg = document.createElement("span");
+      seg.className = "dp-chain-node cyclic";
+      seg.textContent = "循环链(" +
+        node.group.map((m) => m.label).join(" ⇄ ") + ")";
+      seg.title = "循环引用合并项，点击定位";
+      seg.addEventListener("click", () =>
+        locate(...node.group.map((m) => m.id)));
+      chain.appendChild(seg);
+    } else {
+      const m = node.group[0];
+      const seg = document.createElement("button");
+      seg.type = "button";
+      seg.className = "dp-chain-node" + (node.deleted ? " deleted" : "");
+      seg.textContent = m.label;
+      seg.title = (m.heading || "") + (node.deleted ? "（拟删除）" : "");
+      if (!node.deleted) seg.addEventListener("click", () => locate(m.id));
+      chain.appendChild(seg);
+    }
+  });
+  return chain;
+}
+
+function makeDpEntry(e) {
+  const row = document.createElement("div");
+  row.className = "dp-entry" + (e.cyclic ? " cyclic" : "") +
+    (e.transitive_only ? " transitive" : "");
+
+  const head = document.createElement("div");
+  head.className = "dp-entry-head";
+  if (e.cyclic) {
+    head.innerHTML =
+      `<span class="dp-entry-tag tag-cycle">循环链合并</span>` +
+      `<span class="dp-entry-title">${
+        esc(e.members.map((m) => m.label).join(" ⇄ "))}</span>` +
+      `<span class="dp-entry-sub">${
+        esc(e.members.map((m) => m.heading).filter(Boolean).join(" / "))}</span>`;
+    head.addEventListener("click", () => locate(...e.members.map((m) => m.id)));
+  } else {
+    const m = e.members[0];
+    head.innerHTML =
+      `<span class="dp-entry-tag ${e.transitive_only ? "tag-transitive" : "tag-direct"}">` +
+      `${e.transitive_only ? "间接波及" : "直接受影响"}</span>` +
+      `<span class="dp-entry-title">${esc(e.label)}</span>` +
+      `<span class="dp-entry-sub">${esc(e.heading || "")}</span>`;
+    head.addEventListener("click", () => locate(m.id));
+  }
+  row.appendChild(head);
+
+  // 直连变化（去重：同一变化消息在循环组多成员上可能重复出现）
+  const seenMsg = new Set();
+  e.changes.forEach((ch) => {
+    const meta = DP_CHANGE_META[ch.kind] || { tag: ch.kind, cls: "" };
+    const key = ch.kind + "|" + ch.message;
+    if (seenMsg.has(key)) return;
+    seenMsg.add(key);
+    const line = document.createElement("button");
+    line.type = "button";
+    line.className = `dp-change ${meta.cls}`;
+    line.innerHTML =
+      `<span class="dp-change-tag">${meta.tag}</span>` +
+      `<span class="dp-change-msg">${esc(ch.message)}</span>` +
+      (ch.clause_id ? `<span class="dp-change-where">@${esc(ch.clause_label)}</span>` : "");
+    const target = ch.kind === "ref_broken"
+      ? [ch.clause_id, ch.target_id]
+      : [ch.clause_id, ch.old_clause_id].filter(Boolean);
+    line.addEventListener("click", () => locate(...target));
+    row.appendChild(line);
+  });
+
+  row.appendChild(makeDpChain(e));
+  return row;
+}
+
+async function confirmDeletePreview() {
+  if (!state.previewData) return;
+  if (state.previewSig !== draftSignature()) {
+    toast("草稿或勾选已变化，请重新预览后再确认");
+    return;
+  }
+  // 一次性套用现有级联删除：拟删除集 = 后端预演算出的 new_deleted
+  const gone = new Set(state.previewData.new_deleted.map((x) => x.id));
+  const picked = state.previewData.new_deleted.map((x) => x.id);
+  state.order = state.order.filter((cid) => !gone.has(cid));
+  picked.forEach((cid) => {
+    if (!state.deleted.includes(cid)) state.deleted.push(cid);
+  });
+  // 先退出预演态，再走与现有删除完全相同的分析/重排/术语刷新流程
+  state.previewMode = false;
+  state.previewPicked = [];
+  state.previewData = null;
+  state.previewSig = null;
+  els.dpPanel.classList.add("hidden");
+  els.dpResult.classList.add("hidden");
+  els.btnDeletePreview.disabled = false;
+  toast("已套用级联删除，正在重排与改写引用…");
+  await runAnalyze(true);
 }
 
 // ---------------------------------------------------------------- 问题条
@@ -891,6 +1205,7 @@ async function saveDraft() {
 }
 
 async function loadDraft(id) {
+  if (state.previewMode) exitPreviewMode();
   const d = await api(`/api/drafts/${id}`);
   state.currentDraftId = d.id;
   els.input.value = d.content;
@@ -972,6 +1287,7 @@ const EXAMPLE = `鉴于甲方拟采购乙方的系统集成服务，双方经平
 `;
 
 function loadExample() {
+  if (state.previewMode) exitPreviewMode();
   els.input.value = EXAMPLE;
   state.order = [];
   state.deleted = [];
@@ -979,18 +1295,19 @@ function loadExample() {
   state.currentDraftId = null;
   els.draftSelect.value = "";
   runAnalyze(true).then(() => {
-    toast("示例已载入：可切换到「定义术语审校」查看未定义/未使用等问题；试删第3条观察局部定义随删除失效");
+    toast("示例已载入：可点「🗑 删除影响预演」勾选第3条，预览引用失效、术语失效与循环链原因链");
   });
 }
 
 // ---------------------------------------------------------------- 事件绑定
 
 els.btnParse.addEventListener("click", () => {
-  // 重新解析：若文本变化则重置顺序
+  // 重新解析：若文本变化则重置顺序；预演态随之退出（旧结果不得沿用）
   const structureChanged = state.lastParsedText !== els.input.value;
   if (structureChanged) {
     state.order = [];
     state.deleted = [];
+    if (state.previewMode) exitPreviewMode();
   }
   runAnalyze(true);
 });
@@ -998,10 +1315,21 @@ els.btnExample.addEventListener("click", loadExample);
 els.btnSave.addEventListener("click", saveDraft);
 els.tabRefs.addEventListener("click", () => switchMode("refs"));
 els.tabTerms.addEventListener("click", () => switchMode("terms"));
+els.btnDeletePreview.addEventListener("click", enterPreviewMode);
+els.btnDpRun.addEventListener("click", runDeletePreview);
+els.btnDpCancel.addEventListener("click", exitPreviewMode);
+els.btnDpClose.addEventListener("click", exitPreviewMode);
+els.btnDpConfirm.addEventListener("click", () => {
+  els.btnDpConfirm.disabled = true;
+  confirmDeletePreview();
+});
 els.draftSelect.addEventListener("change", async (e) => {
   if (e.target.value) await loadDraft(Number(e.target.value));
 });
 els.input.addEventListener("input", debounce(saveSession, 500));
+els.input.addEventListener("input", () => {
+  if (state.previewMode && state.previewData) markDpStale();
+});
 
 // 启动
 refreshDrafts();

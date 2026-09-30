@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field
 from .parser import parse_contract
 from .references import analyze, cascade_deleted
 from .terms import review_terms
+from .impact import preview_delete
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.environ.get("DATA_DIR", os.path.join(BASE_DIR, "..", "data"))
@@ -102,6 +103,28 @@ def analyze_text(req: AnalyzeRequest) -> dict:
 class TermsRequest(BaseModel):
     text: str = ""
     deleted: list[str] = Field(default_factory=list)
+
+
+class DeletePreviewRequest(BaseModel):
+    text: str = ""
+    order: list[str] = Field(default_factory=list)
+    deleted: list[str] = Field(default_factory=list)
+    selected: list[str] = Field(default_factory=list)
+
+
+@app.post("/api/delete-preview")
+def delete_preview_api(req: DeletePreviewRequest) -> dict:
+    """删除影响预演：只分析不修改。父条款按现有级联规则连同后代纳入。
+
+    order 仅用于与现有草稿状态保持同一请求形状；绑定是否失效与同层
+    排序无关，故不参与计算（确认后的重排由 /api/analyze 统一完成）。
+    """
+    preamble, clauses = parse_contract(req.text)
+    return preview_delete(
+        clauses, preamble,
+        current_deleted=req.deleted,
+        selected=req.selected,
+    )
 
 
 @app.post("/api/terms")

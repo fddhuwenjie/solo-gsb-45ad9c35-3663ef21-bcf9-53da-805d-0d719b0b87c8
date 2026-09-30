@@ -258,6 +258,152 @@ textarea:focus { outline: none; border-color: var(--primary); }
 .mode-tab.active { color: #fff; background: var(--primary); border-color: var(--primary); }
 .mode-pane { display: contents; }
 
+/* 删除影响预演面板整行横跨两栏网格 */
+.delete-preview-panel { grid-column: 1 / -1; }
+
+/* ---------------- 删除影响预演 ---------------- */
+.head-actions { display: flex; gap: 8px; }
+.btn-preview {
+  background: var(--purple-bg); color: var(--purple);
+  border-color: var(--purple); font-weight: 600;
+}
+.btn-preview:hover { background: var(--purple); color: #fff; }
+.btn-preview:disabled { opacity: .55; cursor: default; }
+.btn-danger {
+  background: var(--danger); border-color: var(--danger);
+  color: #fff; font-weight: 600;
+}
+.btn-danger:hover { background: #ff7373; border-color: #ff7373; }
+.btn:disabled { opacity: .5; cursor: not-allowed; }
+
+.delete-preview-panel {
+  border-color: var(--purple);
+  box-shadow: 0 0 0 1px var(--purple-bg);
+}
+.clause-card.previewing { cursor: default; }
+.clause-card.previewing:hover { border-color: var(--border); }
+.dp-check {
+  width: 15px; height: 15px; max-width: none; margin: 0 2px 0 0;
+  accent-color: var(--purple); cursor: pointer; padding: 0;
+}
+.btn-danger-mini.disabled { opacity: .3; pointer-events: none; }
+.tray-item.disabled { opacity: .4; pointer-events: none; }
+
+.dp-bar {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; flex-wrap: wrap;
+  background: var(--panel-2); border: 1px dashed var(--purple);
+  border-radius: 10px; padding: 10px 14px; margin-bottom: 12px;
+}
+.dp-selected { font-size: 12.5px; color: var(--muted); min-width: 0; flex: 1; }
+.dp-selected-label { font-weight: 700; color: var(--purple); }
+.dp-selected-list.empty { color: var(--muted); font-style: italic; }
+.dp-actions { display: flex; gap: 8px; }
+
+.dp-result { display: flex; flex-direction: column; gap: 12px; }
+.dp-stale {
+  background: var(--warn-bg); color: var(--warn);
+  border: 1px solid var(--warn); border-radius: 8px;
+  padding: 8px 12px; font-size: 12.5px; font-weight: 600;
+}
+.dp-summary { display: flex; flex-wrap: wrap; gap: 8px; }
+.dp-stat {
+  font-size: 12.5px; padding: 5px 12px; border-radius: 20px;
+  background: var(--panel-2); border: 1px solid var(--border);
+  color: var(--muted);
+}
+.dp-stat b { color: var(--text); font-size: 14px; margin: 0 2px; }
+.dp-stat.stat-delete { background: var(--danger-bg); color: var(--danger); border-color: transparent; }
+.dp-stat.stat-affect { background: var(--purple-bg); color: var(--purple); border-color: transparent; }
+.dp-stat.stat-ref b { color: var(--danger); }
+.dp-stat.stat-term b { color: var(--warn); }
+.dp-stat.stat-rebind b { color: var(--cyan); }
+
+.dp-deleted-wrap { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.dp-deleted-label { color: var(--muted); font-size: 12.5px; font-weight: 700; }
+.dp-del-chip {
+  font-size: 12px; padding: 3px 10px; border-radius: 20px;
+  cursor: pointer; border: 1px solid transparent;
+}
+.dp-del-chip.picked { background: var(--danger); color: #fff; }
+.dp-del-chip.cascaded { background: var(--danger-bg); color: var(--danger); border-style: dashed; }
+.dp-del-chip:hover { border-color: currentColor; }
+
+.dp-section-title {
+  color: var(--muted); font-size: 12.5px; font-weight: 700;
+  border-top: 1px dashed var(--border); padding-top: 10px;
+}
+.dp-entries { display: flex; flex-direction: column; gap: 8px; }
+.dp-ok { color: var(--ok); font-size: 13px; padding: 6px 2px; }
+
+.dp-entry {
+  background: var(--panel-2); border: 1px solid var(--border);
+  border-radius: 10px; padding: 10px 14px;
+  display: flex; flex-direction: column; gap: 6px;
+}
+.dp-entry.cyclic { border-color: var(--purple); }
+.dp-entry.transitive { opacity: .92; }
+.dp-entry-head {
+  display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;
+  cursor: pointer;
+}
+.dp-entry-head:hover .dp-entry-title { color: var(--primary); }
+.dp-entry-tag {
+  flex-shrink: 0; font-size: 11px; font-weight: 700;
+  padding: 1px 8px; border-radius: 10px;
+}
+.tag-direct { background: var(--danger-bg); color: var(--danger); }
+.tag-transparent, .tag-transitive { background: var(--panel); color: var(--muted); border: 1px solid var(--border); }
+.tag-cycle { background: var(--purple-bg); color: var(--purple); }
+.dp-entry-title { font-weight: 700; font-size: 13.5px; }
+.dp-entry-sub { color: var(--muted); font-size: 12px; }
+
+.dp-change {
+  display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;
+  text-align: left; border: 1px solid transparent; border-radius: 8px;
+  background: var(--panel); padding: 6px 10px; cursor: pointer;
+  font-size: 12.5px;
+}
+.dp-change:hover { border-color: currentColor; }
+.dp-change-tag {
+  flex-shrink: 0; font-size: 11px; font-weight: 700;
+  padding: 1px 8px; border-radius: 10px;
+  background: rgba(255,255,255,.08);
+}
+.dp-change.ref { color: var(--danger); }
+.dp-change.term-lost { color: var(--warn); }
+.dp-change.term-rebind { color: var(--cyan); }
+.dp-change-msg { color: var(--text); flex: 1; min-width: 0; }
+.dp-change-where { color: var(--muted); font-size: 11px; flex-shrink: 0; }
+
+.dp-chain {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 4px;
+  padding: 4px 2px 0; font-size: 12px;
+}
+.dp-chain-edge { color: var(--muted); }
+.dp-chain-node {
+  border: 1px solid var(--border); background: var(--panel);
+  color: var(--primary); border-radius: 8px; padding: 1px 8px;
+  cursor: pointer; font-size: 12px;
+}
+.dp-chain-node:hover { border-color: var(--primary); }
+.dp-chain-node.deleted {
+  color: var(--danger); border-color: var(--danger);
+  background: var(--danger-bg); cursor: default;
+}
+.dp-chain-node.cyclic {
+  color: var(--purple); border-color: var(--purple);
+  background: var(--purple-bg); cursor: pointer;
+}
+
+.dp-foot {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; flex-wrap: wrap;
+  border-top: 1px dashed var(--border); padding-top: 10px;
+}
+.dp-foot-hint { color: var(--muted); font-size: 12px; }
+.dp-foot-btns { display: flex; gap: 8px; }
+
 /* ---------------- 术语审校 ---------------- */
 .term-issues { display: flex; flex-direction: column; gap: 6px; }
 .term-issue-row {

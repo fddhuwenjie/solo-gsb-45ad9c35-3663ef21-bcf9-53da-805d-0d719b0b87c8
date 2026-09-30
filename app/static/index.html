@@ -53,8 +53,11 @@
       <div class="panel order-panel">
         <div class="panel-head">
           <h2>② 按层级拖动调整顺序</h2>
-          <div class="hint">仅同一父级下的兄弟可换序；拖动父条款会连同整棵子树一起移动，删除父条款一并删除子条款</div>
+          <div class="head-actions">
+            <button id="btn-delete-preview" class="btn btn-preview" type="button">🗑 删除影响预演</button>
+          </div>
         </div>
+        <div class="hint order-hint">仅同一父级下的兄弟可换序；拖动父条款会连同整棵子树一起移动，删除父条款一并删除子条款</div>
         <div id="issues-bar" class="issues-bar hidden"></div>
         <ul id="sortable" class="sortable"></ul>
         <div id="tray" class="tray hidden">
@@ -84,6 +87,42 @@
           </div>
         </div>
       </div>
+      </div>
+
+      <!-- 删除影响预演（预览态，不修改草稿；独立于两栏网格，整行展示） -->
+      <div id="delete-preview-panel" class="panel delete-preview-panel hidden">
+        <div class="panel-head">
+          <h2>删除影响预演（仅预览，不会修改草稿）</h2>
+          <div class="hint">勾选当前未删除条款后点击「预览影响」；父条款将连同全部后代一并纳入拟删除集</div>
+        </div>
+
+        <div id="dp-bar" class="dp-bar">
+          <div class="dp-selected">
+            <span class="dp-selected-label">拟删除：</span>
+            <span id="dp-selected-list" class="dp-selected-list">尚未勾选</span>
+          </div>
+          <div class="dp-actions">
+            <button id="btn-dp-run" class="btn btn-primary" type="button">预览影响</button>
+            <button id="btn-dp-cancel" class="btn btn-ghost" type="button">取消预演</button>
+          </div>
+        </div>
+
+        <div id="dp-result" class="dp-result hidden">
+          <div id="dp-stale" class="dp-stale hidden">
+            ⚠ 草稿正文、排序、删除状态或勾选已变化，以下旧结果仅供查看，不能直接确认；请重新预览。
+          </div>
+          <div id="dp-summary" class="dp-summary"></div>
+          <div id="dp-deleted-list" class="dp-deleted-list"></div>
+          <div class="dp-section-title">受影响的仍存活条款（点击条目或原因链节点可定位）</div>
+          <div id="dp-entries" class="dp-entries"></div>
+          <div class="dp-foot">
+            <span class="dp-foot-hint">确认后将一次性套用级联删除，并重排、改写引用与刷新术语审校。</span>
+            <span class="dp-foot-btns">
+              <button id="btn-dp-confirm" class="btn btn-danger" type="button">确认删除</button>
+              <button id="btn-dp-close" class="btn btn-ghost" type="button">取消</button>
+            </span>
+          </div>
+        </div>
       </div>
 
       <!-- 模式二：定义术语审校 -->

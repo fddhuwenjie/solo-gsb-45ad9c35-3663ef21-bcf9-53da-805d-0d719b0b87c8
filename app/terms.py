@@ -172,10 +172,16 @@ def _scan_unquoted(block: _Block, names: list[str],
     return uses
 
 
-# ---------------------------------------------------------------- 主入口
+# ---------------------------------------------------------------- 绑定提取
 
-def review_terms(preamble: str, clauses: list[Clause],
-                 deleted_set: set[str]) -> dict:
+def extract_bindings(preamble: str, clauses: list[Clause],
+                     deleted_set: set[str]) -> dict:
+    """计算当前存活条款下的全部定义、使用与绑定（不做问题汇总）。
+
+    供术语审校与「删除影响预演」复用：预演前后各跑一次，用稳定的
+    use.id / def.id 对比每个使用处绑定的变化。
+    返回 {blocks, defs, uses, def_by_id, groups}。
+    """
     blocks: list[_Block] = [
         _Block(id="preamble", kind="preamble", label="", heading="",
                depth=0, text=preamble or "", path=None, clause_id=None)
@@ -209,16 +215,6 @@ def review_terms(preamble: str, clauses: list[Clause],
     groups: dict[tuple[tuple[int, ...], str], list[str]] = {}
     for d in all_defs:
         groups.setdefault((d.scope_path, d.name), []).append(d.id)
-
-    # 仅在别处子树存在的局部定义（未定义提示用）
-    local_scopes_by_name: dict[str, list[tuple[int, ...]]] = {}
-    for (p, name), ids in groups.items():
-        if p:
-            local_scopes_by_name.setdefault(name, [])
-            if p not in local_scopes_by_name[name]:
-                local_scopes_by_name[name].append(p)
-    for v in local_scopes_by_name.values():
-        v.sort()
 
     def resolve(u: TUse) -> None:
         # 由近到远的祖先局部作用域，最后回退全文作用域
@@ -256,6 +252,36 @@ def review_terms(preamble: str, clauses: list[Clause],
         if len(ids) > 1:
             for did in ids:
                 def_by_id[did].duplicate = True
+
+    return {
+        "blocks": blocks,
+        "defs": all_defs,
+        "uses": all_uses,
+        "def_by_id": def_by_id,
+        "groups": groups,
+    }
+
+
+# ---------------------------------------------------------------- 主入口
+
+def review_terms(preamble: str, clauses: list[Clause],
+                 deleted_set: set[str]) -> dict:
+    extracted = extract_bindings(preamble, clauses, deleted_set)
+    blocks: list[_Block] = extracted["blocks"]
+    all_defs: list[TDef] = extracted["defs"]
+    all_uses: list[TUse] = extracted["uses"]
+    def_by_id: dict[str, TDef] = extracted["def_by_id"]
+    groups: dict[tuple[tuple[int, ...], str], list[str]] = extracted["groups"]
+
+    # 仅在别处子树存在的局部定义（未定义提示用）
+    local_scopes_by_name: dict[str, list[tuple[int, ...]]] = {}
+    for (p, name), ids in groups.items():
+        if p:
+            local_scopes_by_name.setdefault(name, [])
+            if p not in local_scopes_by_name[name]:
+                local_scopes_by_name[name].append(p)
+    for v in local_scopes_by_name.values():
+        v.sort()
 
     # ---- 问题 ----
     issues: list[dict] = []
